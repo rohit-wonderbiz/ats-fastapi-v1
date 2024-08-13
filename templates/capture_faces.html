@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Capture Faces</title>
+  </head>
+  <body>
+    <h1>Face Capture for {{ employee_name }}</h1>
+    <video id="video" autoplay></video>
+    <button onclick="captureImage()">Capture Face</button>
+    <button onclick="saveEncodings()">Save Encodings</button>
+    <!-- <button onclick="detectEmployee()">Detect Employees</button> -->
+    <button><a href="/detect-employee">Detect Employees</a></button>
+    <p id="response"></p>
+
+    <script>
+      const video = document.getElementById("video");
+
+      // Get access to the user's webcam
+      if (navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices
+          .getUserMedia({ video: true })
+          .then(function (stream) {
+            video.srcObject = stream;
+          })
+          .catch(function (err0r) {
+            console.log("Something went wrong!");
+          });
+      }
+    </script>
+    <script>
+      const employeeId = "{{ employee_id }}";
+
+      async function captureImage() {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext("2d");
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageBlob = await new Promise((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg")
+        );
+
+        const formData = new FormData();
+        formData.append("file", imageBlob, "capture.jpg");
+        formData.append("employee_id", employeeId);
+
+        const response = await fetch("/capture-image/", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await response.json();
+        document.getElementById("response").innerText = data.status;
+      }
+
+      async function saveEncodings() {
+        const formData = new FormData();
+        formData.append("employee_id", employeeId);
+
+        const response = await fetch("/save-encoding/", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await response.json();
+        document.getElementById("response").innerText = data.status;
+      }
+
+      async function detectEmployee() {
+        const response = await fetch("/detect-employee/", {
+          method: "GET",
+        });
+
+        const data = await response.json();
+        document.getElementById("response").innerText = data.status;
+      }
+    </script>
+  </body>
+</html>

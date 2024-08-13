@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Detect Employee</title>
+  </head>
+  <body>
+    <h1>Webcam Stream</h1>
+    <video id="video" width="640" height="480" autoplay></video>
+    <button id="markAttendance">Mark Attendance</button>
+    <p id="response"></p>
+
+    <script>
+      const video = document.getElementById("video");
+      const markAttendanceButton = document.getElementById("markAttendance");
+
+      // Get access to the user's webcam
+      if (navigator.mediaDevices.getUserMedia) {
+        navigator.mediaDevices
+          .getUserMedia({ video: true })
+          .then(function (stream) {
+            video.srcObject = stream;
+          })
+          .catch(function (err0r) {
+            console.log("Something went wrong!");
+          });
+      }
+
+      markAttendanceButton.addEventListener("click", async () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const context = canvas.getContext("2d");
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageBlob = await new Promise((resolve) =>
+          canvas.toBlob(resolve, "image/jpeg")
+        );
+
+        const formData = new FormData();
+        formData.append("file", imageBlob, "capture.jpg");
+
+        const response = await fetch("/mark-attendance/", {
+          method: "POST",
+          body: formData,
+        });
+
+        const data = await response.json();
+        document.getElementById("response").innerText = data.message;
+      });
+    </script>
+  </body>
+</html>

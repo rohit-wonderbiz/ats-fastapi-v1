@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Check Employee</title>
+  </head>
+  <body>
+    <h1>Check Employee</h1>
+    <form id="employeeForm">
+      <label for="employee_id">Employee ID:</label>
+      <input type="text" id="employee_id" name="employee_id" required />
+      <button type="button" onclick="checkEmployee()">Check Employee</button>
+    </form>
+    <p id="response"></p>
+
+    <script>
+      async function checkEmployee() {
+        const formData = new FormData(document.getElementById("employeeForm"));
+        const response = await fetch("/check-employee/", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await response.json();
+        if (data.status === "success") {
+          window.location.href = `/capture-faces?employee_id=${data.employee_id}&employee_name=${data.employee_name}`;
+        } else {
+          document.getElementById("response").innerText = data.detail;
+        }
+      }
+    </script>
+  </body>
+</html>
