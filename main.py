@@ -28,10 +28,17 @@ last_attendance_time = {}
 # Directory for storing images
 IMAGES_PATH = 'images/'
 
-# Your existing database connection
+# database connection
 conn = pyodbc.connect(connection_string)
 
+# Load known encodings from the database
+def load_encodings_from_db(conn):
+    cursor = conn.cursor()
+    cursor.execute('SELECT UserId, FirstName, FaceEncoding FROM EmployeeDetails WHERE DATALENGTH(FaceEncoding) > DATALENGTH(0x)')
+    rows = cursor.fetchall()
+    return [row[0] for row in rows], [row[1] for row in rows], [pickle.loads(row[2]) for row in rows]
 
+#Unkown Face 
 def is_recently_detected(face_encoding):
     current_time = time.time()
     for recent_face in recent_unknown_faces:
@@ -41,20 +48,7 @@ def is_recently_detected(face_encoding):
                 return True
     return False
 
-def update_recent_unknown_faces(face_encoding):
-    current_time = time.time()
-    recent_unknown_faces.append((face_encoding, current_time))
-    # Keep only recent detections within the time interval
-    recent_unknown_faces[:] = [face for face in recent_unknown_faces if current_time - face[1] < recent_detection_interval]
-
-
-# Load known encodings from the database
-def load_encodings_from_db(conn):
-    cursor = conn.cursor()
-    cursor.execute('SELECT UserId, FirstName, FaceEncoding FROM EmployeeDetails WHERE DATALENGTH(FaceEncoding) > DATALENGTH(0x)')
-    rows = cursor.fetchall()
-    return [row[0] for row in rows], [row[1] for row in rows], [pickle.loads(row[2]) for row in rows]
-
+# Face Detection function
 def detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame, conn):
     def mark_attendance(conn, userId):
         cursor = conn.cursor()
@@ -86,20 +80,31 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
                     last_attendance_time[name] = current_time
                     mark_attendance(conn, id)
         else:
-            # Check if the face was recently detected
-            if not is_recently_detected(face_encoding):
-                # Save the unknown face
-                unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
-                cv2.imwrite(unknown_face_filename, frame[face_locations[i][0]:face_locations[i][2], face_locations[i][3]:face_locations[i][1]])
-
-                # Update the list of recently detected unknown faces
-                update_recent_unknown_faces(face_encoding)
+            # Save the unknown face
+            unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
+            cv2.imwrite(unknown_face_filename, frame[face_locations[i][0]:face_locations[i][2], face_locations[i][3]:face_locations[i][1]])
 
         face_names.append(name)
 
     return face_locations, face_names
 
 
+# Index Page
+@app.get("/", response_class=HTMLResponse)
+async def check_employee_page():
+    return templates.TemplateResponse("index.html", {"request": {}})
+
+# Check Employee Page
+@app.get("/capture-faces", response_class=HTMLResponse)
+async def capture_faces_page(employee_id: str, employee_name: str):
+    return templates.TemplateResponse("capture_faces.html", {"request": {}, "employee_id": employee_id, "employee_name": employee_name})
+
+# Detect Employee Page
+@app.get("/detect-employee/", response_class=HTMLResponse)
+async def detect_employee():
+    return templates.TemplateResponse("detect_employee.html", {"request": {}})
+
+# Mark attendance endpoint
 @app.post("/mark-attendance/")
 async def mark_attendance(file: UploadFile = File(...)):
     contents = await file.read()
@@ -121,64 +126,7 @@ async def mark_attendance(file: UploadFile = File(...)):
 
     return {"message": f"Attendance marked for {', '.join(known_faces)}"}
 
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    cap = cv2.VideoCapture(videoSource)
-
-    # Load known face encodings
-    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        face_locations, face_names = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame, conn)
-
-        for (top, right, bottom, left) in face_locations:
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 0, 255), 2)
-
-        _, buffer = cv2.imencode('.png', frame)
-        frame_data = buffer.tobytes()
-
-        await websocket.send_bytes(frame_data)
-
-    cap.release()
-
-@app.get("/detect-employee/", response_class=HTMLResponse)
-async def detect_employee():
-    return templates.TemplateResponse("detect_employee.html", {"request": {}})
-
-@app.post("/capture-face/")
-async def capture_face(employee_id: str):
-    person_dir = os.path.join('images', employee_id)
-    os.makedirs(person_dir, exist_ok=True)
-    cap = cv2.VideoCapture(videoSource)
-
-    ret, frame = cap.read()
-    if ret:
-        filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1, 9999)}.jpg"
-        img_path = os.path.join(person_dir, filename)
-        cv2.imwrite(img_path, frame)
-        cap.release()
-        return {"status": "success", "image_path": img_path}
-    else:
-        cap.release()
-        raise HTTPException(status_code=500, detail="Failed to capture image.")
-    
-@app.get("/", response_class=HTMLResponse)
-async def check_employee_page():
-    return templates.TemplateResponse("index.html", {"request": {}})
-
-
-@app.get("/capture-faces", response_class=HTMLResponse)
-async def capture_faces_page(employee_id: str, employee_name: str):
-    return templates.TemplateResponse("capture_faces.html", {"request": {}, "employee_id": employee_id, "employee_name": employee_name})
-
-
+# Check Employee if exists endpoint
 @app.post("/check-employee/")
 async def check_employee(employee_id: str = Form(...)):
     cursor = conn.cursor()
@@ -189,7 +137,7 @@ async def check_employee(employee_id: str = Form(...)):
     else:
         raise HTTPException(status_code=404, detail="Employee ID not found!")
 
-
+# Capture Image endpoint
 @app.post("/capture-image/")
 async def capture_image(file: UploadFile = File(...), employee_id: str = Form(...)):
     person_dir = os.path.join(IMAGES_PATH, str(employee_id))
@@ -205,7 +153,7 @@ async def capture_image(file: UploadFile = File(...), employee_id: str = Form(..
 
     return {"status": "Image saved", "image_path": img_path}
 
-
+# Save the captured image face encodings
 @app.post("/save-encoding/")
 async def save_encoding(employee_id: str = Form(...)):
     person_dir = os.path.join(IMAGES_PATH, str(employee_id))
