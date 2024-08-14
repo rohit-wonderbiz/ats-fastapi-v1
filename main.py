@@ -1,5 +1,6 @@
 import cv2
 import os
+import requests
 import numpy as np
 import pickle
 import time
@@ -10,7 +11,8 @@ from fastapi.templating import Jinja2Templates
 import face_recognition
 import pyodbc
 import random
-from config import connection_string, cameraType, waitTime, videoSource
+from config import connection_string, cameraType, waitTime, apiBaseUrl
+
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -49,13 +51,19 @@ def is_recently_detected(face_encoding):
     return False
 
 # Face Detection function
-def detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame, conn):
-    def mark_attendance(conn, userId):
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO AttendanceLogs (UserId, AttendanceLogTime, CheckType) VALUES (?, ?, ?)''',
-            (userId, datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), cameraType,))
-        conn.commit()
+def detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame):
+    apiUrl = apiBaseUrl + "/attendanceLog/"
+    def mark_attendance(userId):
+        AttendanceLogTime = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+        data = {
+        "UserId": userId,
+        "AttendanceLogTime": AttendanceLogTime,
+        "CheckType": cameraType
+        }
+        requests.post(url=apiUrl, json=data)
+        # print(data)
+        # print(response.status_code)
+        # print(response.text)  # This will give you more information about the error
         print(f"Marked Attendance for {userId}")
 
     # Convert the frame from BGR to RGB
@@ -78,7 +86,7 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
             if face_distances[best_match_index] < 0.35:
                 if name not in last_attendance_time or (current_time - last_attendance_time[name]) > waitTime:
                     last_attendance_time[name] = current_time
-                    mark_attendance(conn, id)
+                    mark_attendance(id)
         else:
             # Save the unknown face
             unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
@@ -104,36 +112,15 @@ async def capture_faces_page(employee_id: str, employee_name: str):
 async def detect_employee():
     return templates.TemplateResponse("detect_employee.html", {"request": {}})
 
-# Mark attendance endpoint
-@app.post("/mark-attendance/")
-async def mark_attendance(file: UploadFile = File(...)):
-    contents = await file.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)
-
-    face_locations, face_names = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame, conn)
-
-    if len(face_names) == 0:
-        return {"message": "Keep your face visible and mark the attendance"}
-
-    # Filter out unknown faces and join known face names with commas
-    known_faces = [name for name in face_names if name != "Unknown"]
-    
-    if len(known_faces) == 0:
-        return {"message": "Unknown face(s) detected"}
-
-    return {"message": f"Attendance marked for {', '.join(known_faces)}"}
-
 # Check Employee if exists endpoint
 @app.post("/check-employee/")
 async def check_employee(employee_id: str = Form(...)):
-    cursor = conn.cursor()
-    cursor.execute('SELECT Id, FirstName FROM EmployeeDetails WHERE UserId = (?)', (employee_id,))
-    result = cursor.fetchone()
-    if result:
-        return {"status": "success", "employee_id": employee_id, "employee_name": result[1]}
+    apiUrl = apiBaseUrl + "/employeedetail/" + str(employee_id) 
+    result = requests.get(url=apiUrl)
+    data = result.json()
+    print(data)
+    if data:
+        return {"status": "success", "employee_id": employee_id, "employee_name": data['firstName']}
     else:
         raise HTTPException(status_code=404, detail="Employee ID not found!")
 
@@ -180,3 +167,25 @@ async def save_encoding(employee_id: str = Form(...)):
         return {"status": "success", "message": "Face encoding saved!"}
     else:
         raise HTTPException(status_code=400, detail="No faces detected in the images!")
+
+# Mark attendance endpoint
+@app.post("/mark-attendance/")
+async def mark_attendance(file: UploadFile = File(...)):
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)
+
+    face_locations, face_names = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame)
+
+    if len(face_names) == 0:
+        return {"message": "Keep your face visible and mark the attendance"}
+
+    # Filter out unknown faces and join known face names with commas
+    known_faces = [name for name in face_names if name != "Unknown"]
+    
+    if len(known_faces) == 0:
+        return {"message": "Unknown face(s) detected"}
+
+    return {"message": f"Attendance marked for {', '.join(known_faces)}"}
