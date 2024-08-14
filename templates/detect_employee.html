@@ -7,13 +7,27 @@
   </head>
   <body>
     <h1>Webcam Stream</h1>
-    <video id="video" width="640" height="480" autoplay></video>
-    <button id="markAttendance">Mark Attendance</button>
-    <p id="response"></p>
+    <div style="display: flex">
+      <div>
+        <video id="video" width="640" height="480" autoplay></video>
+        <button id="markAttendance">Mark Attendance</button>
+        <p id="response"></p>
+      </div>
+      <div>
+        <img
+          id="processedImage"
+          src=""
+          alt="Processed Image"
+          width="640"
+          height="480"
+        />
+      </div>
+    </div>
 
     <script>
       const video = document.getElementById("video");
       const markAttendanceButton = document.getElementById("markAttendance");
+      const processedImage = document.getElementById("processedImage");
 
       // Get access to the user's webcam
       if (navigator.mediaDevices.getUserMedia) {
@@ -46,8 +60,14 @@
           body: formData,
         });
 
-        const data = await response.json();
-        document.getElementById("response").innerText = data.message;
+        if (response.ok) {
+          const imageUrl = URL.createObjectURL(await response.blob());
+          processedImage.src = imageUrl;
+          document.getElementById("response").innerText = "Attendance marked!";
+        } else {
+          const data = await response.json();
+          document.getElementById("response").innerText = data.message;
+        }
       });
     </script>
   </body>

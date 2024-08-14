@@ -11,7 +11,9 @@ from fastapi.templating import Jinja2Templates
 import face_recognition
 import pyodbc
 import random
-from config import connection_string, cameraType, waitTime, apiBaseUrl
+from config import connection_string, cameraType, waitTime, apiBaseUrl, detectMultipleface
+import io
+from fastapi.responses import StreamingResponse
 
 
 app = FastAPI()
@@ -53,17 +55,15 @@ def is_recently_detected(face_encoding):
 # Face Detection function
 def detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame):
     apiUrl = apiBaseUrl + "/attendanceLog/"
+    
     def mark_attendance(userId):
         AttendanceLogTime = datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         data = {
-        "UserId": userId,
-        "AttendanceLogTime": AttendanceLogTime,
-        "CheckType": cameraType
+            "UserId": userId,
+            "AttendanceLogTime": AttendanceLogTime,
+            "CheckType": cameraType
         }
         requests.post(url=apiUrl, json=data)
-        # print(data)
-        # print(response.status_code)
-        # print(response.text)  # This will give you more information about the error
         print(f"Marked Attendance for {userId}")
 
     # Convert the frame from BGR to RGB
@@ -75,26 +75,52 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
 
     face_names = []
     current_time = time.time()
-    for i, face_encoding in enumerate(face_encodings):
-        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-        name = "Unknown"
-        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-        best_match_index = np.argmin(face_distances)
-        if matches[best_match_index] and face_distances[best_match_index] < 0.45:
-            id = known_face_id[best_match_index]
-            name = known_face_names[best_match_index]
-            if face_distances[best_match_index] < 0.35:
-                if name not in last_attendance_time or (current_time - last_attendance_time[name]) > waitTime:
-                    last_attendance_time[name] = current_time
-                    mark_attendance(id)
-        else:
-            # Save the unknown face
-            unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
-            cv2.imwrite(unknown_face_filename, frame[face_locations[i][0]:face_locations[i][2], face_locations[i][3]:face_locations[i][1]])
+    
+    if detectMultipleface:
+        # Detect and mark attendance for multiple faces
+        for i, face_encoding in enumerate(face_encodings):
+            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+            name = "Unknown"
+            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            best_match_index = np.argmin(face_distances)
+            if matches[best_match_index] and face_distances[best_match_index] < 0.45:
+                id = known_face_id[best_match_index]
+                name = known_face_names[best_match_index]
+                if face_distances[best_match_index] < 0.35:
+                    if name not in last_attendance_time or (current_time - last_attendance_time[name]) > waitTime:
+                        last_attendance_time[name] = current_time
+                        mark_attendance(id)
+            else:
+                # Save the unknown face
+                unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
+                cv2.imwrite(unknown_face_filename, frame[face_locations[i][0]:face_locations[i][2], face_locations[i][3]:face_locations[i][1]])
 
-        face_names.append(name)
+            face_names.append(name)
+
+    else:
+        # Detect and mark attendance for only the first face found
+        if face_encodings:
+            face_encoding = face_encodings[0]
+            matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
+            name = "Unknown"
+            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            best_match_index = np.argmin(face_distances)
+            if matches[best_match_index] and face_distances[best_match_index] < 0.45:
+                id = known_face_id[best_match_index]
+                name = known_face_names[best_match_index]
+                if face_distances[best_match_index] < 0.35:
+                    if name not in last_attendance_time or (current_time - last_attendance_time[name]) > waitTime:
+                        last_attendance_time[name] = current_time
+                        mark_attendance(id)
+            else:
+                # Save the unknown face
+                unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
+                cv2.imwrite(unknown_face_filename, frame[face_locations[0][0]:face_locations[0][2], face_locations[0][3]:face_locations[0][1]])
+
+            face_names.append(name)
 
     return face_locations, face_names
+
 
 
 # Index Page
@@ -118,7 +144,7 @@ async def check_employee(employee_id: str = Form(...)):
     apiUrl = apiBaseUrl + "/employeedetail/" + str(employee_id) 
     result = requests.get(url=apiUrl)
     data = result.json()
-    print(data)
+    # print(data)
     if data:
         return {"status": "success", "employee_id": employee_id, "employee_name": data['firstName']}
     else:
@@ -182,10 +208,20 @@ async def mark_attendance(file: UploadFile = File(...)):
     if len(face_names) == 0:
         return {"message": "Keep your face visible and mark the attendance"}
 
-    # Filter out unknown faces and join known face names with commas
-    known_faces = [name for name in face_names if name != "Unknown"]
-    
-    if len(known_faces) == 0:
-        return {"message": "Unknown face(s) detected"}
+    # Draw the boundary box and label for each detected face
+    for (top, right, bottom, left), name in zip(face_locations, face_names):
+        # print(name)
+        color = (0, 255, 0)
+        if name == 'Unknown':
+            color = (0, 0, 255)
+        # Draw a box around the face
+        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        # Draw a label with a name below the face
+        cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2)
 
-    return {"message": f"Attendance marked for {', '.join(known_faces)}"}
+    # Convert the processed frame to a JPEG image
+    _, img_encoded = cv2.imencode('.jpg', frame)
+    img_bytes = io.BytesIO(img_encoded.tobytes())
+
+    # Send the processed image back as a response
+    return StreamingResponse(img_bytes, media_type="image/jpeg")
