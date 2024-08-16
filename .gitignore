@@ -87,6 +87,7 @@ venv
 config.py
 /images
 /unknown_faces
+dlib-19.24.99-cp312-cp312-win_amd64.whl
 #   For a library or package, you might want to ignore these files since the code is
 #   intended to run in multiple environments; otherwise, check them in:
 # .python-version

@@ -6,7 +6,7 @@ import pickle
 import time
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, Form, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import face_recognition
 import pyodbc
@@ -14,26 +14,9 @@ import random
 from config import connection_string, cameraType, waitTime, apiBaseUrl, detectMultipleface
 import io
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List
-from fastapi.middleware.cors import CORSMiddleware
-import base64
+
 
 app = FastAPI()
-
-origins = [
-    "http://localhost",
-    "http://localhost:4200",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 templates = Jinja2Templates(directory="templates")
 
 # Directory to save unknown faces
@@ -51,10 +34,6 @@ IMAGES_PATH = 'images/'
 
 # database connection
 conn = pyodbc.connect(connection_string)
-class FaceDetectionResponse(BaseModel):
-    face_names: List[str]
-    image_base64: str
-    attendanceTime: str
 
 # Load known encodings from the database
 def load_encodings_from_db(conn):
@@ -140,7 +119,36 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
 
             face_names.append(name)
 
-    return face_locations, face_names, id
+    return face_locations, face_names
+
+
+
+# Index Page
+@app.get("/", response_class=HTMLResponse)
+async def check_employee_page():
+    return templates.TemplateResponse("index.html", {"request": {}})
+
+# Check Employee Page
+@app.get("/capture-faces", response_class=HTMLResponse)
+async def capture_faces_page(employee_id: str, employee_name: str):
+    return templates.TemplateResponse("capture_faces.html", {"request": {}, "employee_id": employee_id, "employee_name": employee_name})
+
+# Detect Employee Page
+@app.get("/detect-employee/", response_class=HTMLResponse)
+async def detect_employee():
+    return templates.TemplateResponse("detect_employee.html", {"request": {}})
+
+# Check Employee if exists endpoint
+@app.post("/check-employee/")
+async def check_employee(employee_id: str = Form(...)):
+    apiUrl = apiBaseUrl + "/employeedetail/" + str(employee_id) 
+    result = requests.get(url=apiUrl)
+    data = result.json()
+    # print(data)
+    if data:
+        return {"status": "success", "employee_id": employee_id, "employee_name": data['firstName']}
+    else:
+        raise HTTPException(status_code=404, detail="Employee ID not found!")
 
 # Capture Image endpoint
 @app.post("/capture-image/")
@@ -193,32 +201,27 @@ async def mark_attendance(file: UploadFile = File(...)):
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)  # Replace None with your DB connection
-    face_locations, face_names, id = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame)
+    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)
+
+    face_locations, face_names = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame)
+
+    if len(face_names) == 0:
+        return {"message": "Keep your face visible and mark the attendance"}
 
     # Draw the boundary box and label for each detected face
     for (top, right, bottom, left), name in zip(face_locations, face_names):
-        color = (0, 255, 0) if name != 'Unknown' else (0, 0, 255)
+        # print(name)
+        color = (0, 255, 0)
+        if name == 'Unknown':
+            color = (0, 0, 255)
+        # Draw a box around the face
         cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        # Draw a label with a name below the face
         cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2)
 
-    # Convert the processed frame to a base64-encoded JPEG image
+    # Convert the processed frame to a JPEG image
     _, img_encoded = cv2.imencode('.jpg', frame)
     img_bytes = io.BytesIO(img_encoded.tobytes())
-    img_base64 = base64.b64encode(img_bytes.getvalue()).decode('utf-8')
 
-    ##
-    apiUrl = apiBaseUrl + "/attendanceLog/user/" + str(id) 
-    result = requests.get(url=apiUrl)
-    data = result.json()
-    attendanceTime = data[-1]['attendanceLogTime']
-    attendanceTime = str(datetime.fromisoformat(attendanceTime).strftime("%B %d, %Y, %I:%M %p"))
-    
-    # Create the response model
-    response_data = FaceDetectionResponse(
-        face_names=face_names,
-        image_base64=img_base64,
-        attendanceTime= attendanceTime
-    )
-
-    return JSONResponse(content=response_data.model_dump())
+    # Send the processed image back as a response
+    return StreamingResponse(img_bytes, media_type="image/jpeg")
