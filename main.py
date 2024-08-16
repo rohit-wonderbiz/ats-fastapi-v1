@@ -74,6 +74,7 @@ def is_recently_detected(face_encoding):
     return False
 
 # Face Detection function
+# Face Detection function
 def detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame):
     apiUrl = apiBaseUrl + "/attendanceLog/"
     
@@ -95,6 +96,7 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
     face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
     face_names = []
+    detected_id = None  # Initialize detected_id to None
     current_time = time.time()
     
     if detectMultipleface:
@@ -105,12 +107,12 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
             if matches[best_match_index] and face_distances[best_match_index] < 0.45:
-                id = known_face_id[best_match_index]
+                detected_id = known_face_id[best_match_index]
                 name = known_face_names[best_match_index]
                 if face_distances[best_match_index] < 0.35:
                     if name not in last_attendance_time or (current_time - last_attendance_time[name]) > waitTime:
                         last_attendance_time[name] = current_time
-                        mark_attendance(id)
+                        mark_attendance(detected_id)
             else:
                 # Save the unknown face
                 unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
@@ -127,12 +129,12 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
             face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
             best_match_index = np.argmin(face_distances)
             if matches[best_match_index] and face_distances[best_match_index] < 0.45:
-                id = known_face_id[best_match_index]
+                detected_id = known_face_id[best_match_index]
                 name = known_face_names[best_match_index]
                 if face_distances[best_match_index] < 0.35:
                     if name not in last_attendance_time or (current_time - last_attendance_time[name]) > waitTime:
                         last_attendance_time[name] = current_time
-                        mark_attendance(id)
+                        mark_attendance(detected_id)
             else:
                 # Save the unknown face
                 unknown_face_filename = os.path.join(unknown_faces_dir, f"unknown_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png")
@@ -140,7 +142,8 @@ def detect_known_faces(known_face_id, known_face_names, known_face_encodings, fr
 
             face_names.append(name)
 
-    return face_locations, face_names, id
+    return face_locations, face_names, detected_id  # Return detected_id instead of id
+
 
 # Capture Image endpoint
 @app.post("/capture-image/")
@@ -193,8 +196,8 @@ async def mark_attendance(file: UploadFile = File(...)):
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)  # Replace None with your DB connection
-    face_locations, face_names, id = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame)
+    known_face_id, known_face_names, known_face_encodings = load_encodings_from_db(conn)
+    face_locations, face_names, detected_id = detect_known_faces(known_face_id, known_face_names, known_face_encodings, frame)
 
     # Draw the boundary box and label for each detected face
     for (top, right, bottom, left), name in zip(face_locations, face_names):
@@ -207,18 +210,21 @@ async def mark_attendance(file: UploadFile = File(...)):
     img_bytes = io.BytesIO(img_encoded.tobytes())
     img_base64 = base64.b64encode(img_bytes.getvalue()).decode('utf-8')
 
-    ##
-    apiUrl = apiBaseUrl + "/attendanceLog/user/" + str(id) 
-    result = requests.get(url=apiUrl)
-    data = result.json()
-    attendanceTime = data[-1]['attendanceLogTime']
-    attendanceTime = str(datetime.fromisoformat(attendanceTime).strftime("%B %d, %Y, %I:%M %p"))
-    
+    # Fetch the attendance time only if a known face is detected
+    attendanceTime = ""
+    if detected_id is not None:
+        apiUrl = apiBaseUrl + "/attendanceLog/user/" + str(detected_id) 
+        result = requests.get(url=apiUrl)
+        data = result.json()
+        attendanceTime = data[-1]['attendanceLogTime']
+        attendanceTime = str(datetime.fromisoformat(attendanceTime).strftime("%B %d, %Y, %I:%M %p"))
+
     # Create the response model
     response_data = FaceDetectionResponse(
         face_names=face_names,
         image_base64=img_base64,
-        attendanceTime= attendanceTime
+        attendanceTime=attendanceTime
     )
 
     return JSONResponse(content=response_data.model_dump())
+
